@@ -1,0 +1,4 @@
+.build/
+DeepSeekMeter.app/
+.DS_Store
+*.xcodeproj
