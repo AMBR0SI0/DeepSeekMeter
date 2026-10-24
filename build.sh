@@ -1,13 +1,13 @@
 #!/bin/bash
-# Builds DeepSeekMeter and wraps the binary in a .app bundle.
+# Builds TokenMeter and wraps the binary in a .app bundle.
 # Usage: ./build.sh [--native]
 #   --native  build only for this machine instead of a universal binary
 set -euo pipefail
 
 cd "$(dirname "$0")"
 
-APP="DeepSeekMeter.app"
-BIN=".build/release/DeepSeekMeter"
+APP="TokenMeter.app"
+BIN=".build/release/TokenMeter"
 
 if [[ "${1:-}" == "--native" ]]; then
     swift build -c release
@@ -19,7 +19,7 @@ fi
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 
-cp "$BIN" "$APP/Contents/MacOS/DeepSeekMeter"
+cp "$BIN" "$APP/Contents/MacOS/TokenMeter"
 cp Resources/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
 
 cat > "$APP/Contents/Info.plist" <<'PLIST'
@@ -28,13 +28,13 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 <plist version="1.0">
 <dict>
     <key>CFBundleName</key>
-    <string>DeepSeek Meter</string>
+    <string>Token Meter</string>
     <key>CFBundleDisplayName</key>
-    <string>DeepSeek Meter</string>
+    <string>Token Meter</string>
     <key>CFBundleIdentifier</key>
-    <string>com.deepak.deepseekmeter</string>
+    <string>dev.mathuria.tokenmeter</string>
     <key>CFBundleExecutable</key>
-    <string>DeepSeekMeter</string>
+    <string>TokenMeter</string>
     <key>CFBundleIconFile</key>
     <string>AppIcon</string>
     <key>CFBundlePackageType</key>

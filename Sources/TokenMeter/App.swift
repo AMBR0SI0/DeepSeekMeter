@@ -4,14 +4,17 @@ import QuartzCore
 import SwiftUI
 
 @main
-struct DeepSeekMeterApp: App {
+struct TokenMeterApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
 
     var body: some Scene {
-        MenuBarExtra("DeepSeek Meter", systemImage: "gauge.with.dots.needle.67percent") {
+        MenuBarExtra("Token Meter", systemImage: "gauge.with.dots.needle.67percent") {
             Button("Show Meter") { PanelController.shared.show() }
             Button("Expand Meter") { PanelController.shared.expand() }
             Button("Reset Position") { PanelController.shared.resetPosition() }
+            Divider()
+            Button("Edit Configuration…") { Configuration.open() }
+            Button("Reload Configuration") { UsageStore.shared.reloadConfiguration() }
             Button("Open Data Folder") {
                 NSWorkspace.shared.activateFileViewerSelecting([UsageStore.dataDirectory])
             }
@@ -20,7 +23,7 @@ struct DeepSeekMeterApp: App {
                 Task { await UsageStore.shared.refreshBalance() }
             }
             Divider()
-            Button("Quit DeepSeek Meter") { NSApp.terminate(nil) }
+            Button("Quit Token Meter") { NSApp.terminate(nil) }
         }
         .menuBarExtraStyle(.menu)
     }
@@ -39,6 +42,38 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
         PanelController.shared.show()
+    }
+}
+
+/// The config file is a plain JSON document next to the state file. When it
+/// does not exist, a template for the detected provider is written first so
+/// "Edit Configuration…" always opens something useful.
+enum Configuration {
+    static func open() {
+        let url = UsageStore.configFileURL
+        if !FileManager.default.fileExists(atPath: url.path) {
+            try? template.write(to: url, atomically: true, encoding: .utf8)
+        }
+        NSWorkspace.shared.open(url)
+    }
+
+    private struct Template: Encodable {
+        var provider: Provider
+        var pricing: Pricing
+        var historyDays: Int
+    }
+
+    private static var template: String {
+        let preset = Presets.detect()
+        let template = Template(provider: preset.provider, pricing: preset.pricing, historyDays: 7)
+
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
+        guard let data = try? encoder.encode(template),
+              let text = String(data: data, encoding: .utf8) else {
+            return "{}"
+        }
+        return text + "\n"
     }
 }
 
@@ -91,7 +126,10 @@ enum Snapshot {
             record.input = Int(Double(tokens) * 0.16)
             record.output = Int(Double(tokens) * 0.03)
             record.cacheRead = Int(Double(tokens) * 0.81)
-            record.spend = Double(tokens) / 1_000_000 * 0.42
+            // A blended rate keeps the demo honest-looking without pretending
+            // one model priced the whole day.
+            record.spend = Double(tokens) / 1_000_000 * 0.26
+            record.pricedTokens = tokens
             return (record.key, record)
         }
 
@@ -99,6 +137,10 @@ enum Snapshot {
             day(0, 13_240_000, 968),
             day(-1, 38_640_000, 1_940),
             day(-2, 22_150_000, 1_204),
+            day(-3, 9_800_000, 612),
+            day(-4, 31_050_000, 1_502),
+            day(-5, 4_420_000, 318),
+            day(-6, 0, 0),
         ])
         store.balance = Balance(total: 42.80, granted: 10, toppedUp: 32.80, currency: "USD", fetchedAt: fixed)
         store.lastScan = fixed

@@ -50,7 +50,7 @@ struct RootView: View {
             HStack(spacing: 6) {
                 Orb(level: idleLevel, size: 10, animated: false)
 
-                Text(Fmt.money(store.balance.total, currency: store.balance.currency))
+                Text(Fmt.money(store.headlineValue, currency: store.headlineCurrency))
                     .number(12)
                     .foregroundStyle(Palette.accent)
                     .contentTransition(.numericText())
@@ -95,6 +95,15 @@ struct RootView: View {
         return Double(value) / Double(red)
     }
 
+    /// A day with tokens but no matching price is a floor, not a total, so it
+    /// is marked with a tilde; a day with no recorded usage has no figure.
+    private func spendText(_ day: DayRecord) -> String {
+        guard day.tokens > 0 else { return "—" }
+        guard day.pricedTokens > 0 else { return "—" }
+        let value = Fmt.cost(day.spend, currency: store.spendCurrency)
+        return day.pricedTokens < day.tokens ? "~" + value : value
+    }
+
     // MARK: Compact — windows, sparkline, request count
 
     private var compact: some View {
@@ -102,7 +111,7 @@ struct RootView: View {
             HStack(spacing: 6) {
                 Orb(level: level, size: 12)
 
-                Text("DeepSeek")
+                Text(store.provider.name)
                     .number(10)
                     .lineLimit(1)
 
@@ -118,15 +127,15 @@ struct RootView: View {
             .padding(.top, 8)
 
             HStack(alignment: .firstTextBaseline, spacing: 4) {
-                Text(Fmt.money(store.balance.total, currency: store.balance.currency))
+                Text(Fmt.money(store.headlineValue, currency: store.headlineCurrency))
                     .number(21)
                     .foregroundStyle(Palette.accent)
                     .contentTransition(.numericText())
                     .lineLimit(1)
                     .minimumScaleFactor(0.6)
-                    .changeEffect(.shine, value: store.balance.total)
+                    .changeEffect(.shine, value: store.headlineValue)
 
-                Text("left")
+                Text(store.headlineLabel)
                     .label(7)
                     .foregroundStyle(.secondary)
 
@@ -155,7 +164,7 @@ struct RootView: View {
                     .number(9)
                 Text("·")
                     .foregroundStyle(.white.opacity(0.25))
-                Text(Fmt.compact(store.today.requests) + " requests")
+                Text(spendText(store.today))
                     .number(9)
                     .foregroundStyle(.white.opacity(0.7))
                 Spacer(minLength: 0)
@@ -242,7 +251,7 @@ struct RootView: View {
             Orb(level: level, size: 16, animated: false)
 
             VStack(alignment: .leading, spacing: 0) {
-                Text("DeepSeek").number(13)
+                Text(store.provider.name).number(13)
                 Text("usage meter").label(7).foregroundStyle(.secondary)
             }
 
@@ -271,7 +280,7 @@ struct RootView: View {
     private var balanceHero: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .firstTextBaseline) {
-                Text(Fmt.money(store.balance.total, currency: store.balance.currency))
+                Text(Fmt.money(store.headlineValue, currency: store.headlineCurrency))
                     .number(28)
                     .foregroundStyle(Palette.accent)
                     .contentTransition(.numericText())
@@ -281,8 +290,8 @@ struct RootView: View {
                 Spacer()
 
                 VStack(alignment: .trailing, spacing: 1) {
-                    Text("remaining").label(8).foregroundStyle(.secondary)
-                    Text(store.balance.currency.uppercased())
+                    Text(store.showsBalance ? "remaining" : "today").label(8).foregroundStyle(.secondary)
+                    Text(store.headlineCurrency.uppercased())
                         .label(8)
                         .foregroundStyle(.white.opacity(0.75))
                 }
@@ -290,8 +299,8 @@ struct RootView: View {
 
             HStack(spacing: 14) {
                 stat("tokens today", Fmt.compact(store.today.tokens))
+                stat("spent today", spendText(store.today))
                 stat("requests", "\(store.today.requests)")
-                stat("cache hit", Fmt.percent(store.today.cacheHitRate))
             }
         }
     }
@@ -390,7 +399,7 @@ struct RootView: View {
             HStack {
                 Text("daily report").label(8).foregroundStyle(.secondary)
                 Spacer()
-                Text("3 days · detail").label(8).foregroundStyle(.white.opacity(0.35))
+                Text("\(store.historyDays) days · detail").label(8).foregroundStyle(.white.opacity(0.35))
             }
 
             ForEach(store.reportDays) { day in
@@ -431,6 +440,16 @@ struct RootView: View {
                         .minimumScaleFactor(0.75)
                         .frame(width: 46, alignment: .trailing)
                         .foregroundStyle(.white.opacity(0.85))
+
+                    Text(spendText(day))
+                        .number(9)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.75)
+                        .frame(width: 46, alignment: .trailing)
+                        .foregroundStyle(.white.opacity(0.5))
+                        .help(day.pricedTokens < day.tokens && day.tokens > 0
+                              ? "No price for this model — add one in config.json"
+                              : "Estimated spend")
                 }
 
                 if isOpen {
@@ -438,8 +457,8 @@ struct RootView: View {
                         chip("in", Fmt.compact(day.input))
                         chip("out", Fmt.compact(day.output))
                         chip("cached", Fmt.percent(day.cacheHitRate))
-                        if day.spend > 0 {
-                            chip("spend", Fmt.money(day.spend, currency: store.balance.currency))
+                        if day.pricedTokens > 0 {
+                            chip("spend", Fmt.cost(day.spend, currency: store.spendCurrency))
                         }
                     }
                     .padding(.leading, 67)

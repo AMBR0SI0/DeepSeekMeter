@@ -5,6 +5,7 @@ import Observation
 
 struct UsageSample {
     let id: String
+    let date: Date
     let minuteKey: String
     let dayKey: String
     let model: String
@@ -19,10 +20,11 @@ struct UsageSample {
 // MARK: - Transcript scanner
 
 enum TranscriptScanner {
-    /// Claude Code's transcript directory. Override with DEEPSEEKMETER_TRANSCRIPTS.
+    /// Claude Code's transcript directory. Override with TOKENMETER_TRANSCRIPTS.
     static var root: URL {
-        if let override = ProcessInfo.processInfo.environment["DEEPSEEKMETER_TRANSCRIPTS"],
-           !override.isEmpty {
+        let environment = ProcessInfo.processInfo.environment
+        let override = environment["TOKENMETER_TRANSCRIPTS"] ?? environment["DEEPSEEKMETER_TRANSCRIPTS"]
+        if let override, !override.isEmpty {
             return URL(fileURLWithPath: (override as NSString).expandingTildeInPath)
         }
         return FileManager.default.homeDirectoryForCurrentUser.appending(path: ".claude/projects")
@@ -98,6 +100,7 @@ enum TranscriptScanner {
 
         return UsageSample(
             id: id,
+            date: date,
             minuteKey: Clock.minuteKey(date),
             dayKey: Clock.dayKey(date),
             model: (message["model"] as? String) ?? "unknown",
@@ -109,68 +112,6 @@ enum TranscriptScanner {
     }
 }
 
-// MARK: - DeepSeek balance
-
-enum DeepSeek {
-    /// Looked up on every call and never logged or written to disk. The
-    /// environment wins so the app works without a Claude Code install.
-    static func token(environment: [String: String] = ProcessInfo.processInfo.environment) -> String? {
-        if let direct = environment["DEEPSEEK_API_KEY"], !direct.isEmpty { return direct }
-
-        // Running Claude Code against DeepSeek's Anthropic-compatible endpoint
-        // keeps the key in the CLI's own settings file.
-        let url = FileManager.default.homeDirectoryForCurrentUser.appending(path: ".claude/settings.json")
-        guard let data = try? Data(contentsOf: url),
-              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let env = root["env"] as? [String: Any],
-              let token = env["ANTHROPIC_AUTH_TOKEN"] as? String,
-              !token.isEmpty else { return nil }
-        return token
-    }
-
-    static func balance(token: String) async throws -> Balance {
-        var request = URLRequest(url: URL(string: "https://api.deepseek.com/user/balance")!)
-        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        request.timeoutInterval = 15
-
-        let (data, response) = try await URLSession.shared.data(for: request)
-        guard let http = response as? HTTPURLResponse else { throw MeterError.badResponse }
-        guard http.statusCode == 200 else { throw MeterError.status(http.statusCode) }
-
-        guard let root = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let infos = root["balance_infos"] as? [[String: Any]],
-              let first = infos.first else { throw MeterError.badResponse }
-
-        func number(_ key: String) -> Double {
-            if let d = first[key] as? NSNumber { return d.doubleValue }
-            if let s = first[key] as? String { return Double(s) ?? 0 }
-            return 0
-        }
-
-        return Balance(
-            total: number("total_balance"),
-            granted: number("granted_balance"),
-            toppedUp: number("topped_up_balance"),
-            currency: (first["currency"] as? String) ?? "USD",
-            fetchedAt: .now
-        )
-    }
-}
-
-enum MeterError: LocalizedError {
-    case badResponse
-    case status(Int)
-    case noToken
-
-    var errorDescription: String? {
-        switch self {
-        case .badResponse: return "Unexpected balance response"
-        case .status(let code): return "Balance API returned \(code)"
-        case .noToken: return "No ANTHROPIC_AUTH_TOKEN in settings"
-        }
-    }
-}
-
 // MARK: - Store
 
 @MainActor
@@ -178,13 +119,17 @@ enum MeterError: LocalizedError {
 final class UsageStore {
     static let shared = UsageStore()
 
-    /// Detail is kept this many days; older days collapse to a retained summary.
+    /// Minute detail is kept this many days; daily summaries live much longer.
     static let detailDays = 3
 
     var balance = Balance()
     var minutes: [String: Int] = [:]
     var days: [String: DayRecord] = [:]
     var thresholds = Thresholds()
+    var provider = Preset.deepSeek.provider
+    var pricing = Preset.deepSeek.pricing
+    /// Days shown in the report; 3–30, from `config.json`.
+    var historyDays = 7
     var lastScan = Date.distantPast
     var problem: String?
     var isReady = false
@@ -201,18 +146,23 @@ final class UsageStore {
 
     nonisolated static var dataDirectory: URL {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appending(path: "DeepSeekMeter", directoryHint: .isDirectory)
+            .appending(path: "TokenMeter", directoryHint: .isDirectory)
         try? FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
         return base
     }
 
+    nonisolated static var configFileURL: URL {
+        dataDirectory.appending(path: "config.json")
+    }
+
     private var stateURL: URL { UsageStore.dataDirectory.appending(path: "state.json") }
-    private var configURL: URL { UsageStore.dataDirectory.appending(path: "config.json") }
+    private var configURL: URL { UsageStore.configFileURL }
 
     // MARK: Lifecycle
 
     func start() {
         guard ticker == nil else { return }
+        UsageStore.migrateLegacyData()
         load()
         applyConfig()
         scan()
@@ -228,6 +178,26 @@ final class UsageStore {
             }
         }
         Task { await refreshBalance() }
+    }
+
+    /// Renaming the app changes the data folder. Copy the old state once so
+    /// history survives; the old folder is left untouched.
+    nonisolated static func migrateLegacyData() {
+        let fileManager = FileManager.default
+        guard let support = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else { return }
+
+        let legacy = support.appending(path: "DeepSeekMeter", directoryHint: .isDirectory)
+        let current = dataDirectory
+        guard !fileManager.fileExists(atPath: current.appending(path: "state.json").path),
+              fileManager.fileExists(atPath: legacy.appending(path: "state.json").path) else { return }
+
+        for name in ["state.json", "config.json"] {
+            let from = legacy.appending(path: name)
+            let to = current.appending(path: name)
+            guard fileManager.fileExists(atPath: from.path),
+                  !fileManager.fileExists(atPath: to.path) else { continue }
+            try? fileManager.copyItem(at: from, to: to)
+        }
     }
 
     // MARK: Windows
@@ -277,10 +247,10 @@ final class UsageStore {
         return days[key] ?? DayRecord(key: key)
     }
 
-    /// Newest first, missing days filled in so the report always shows three rows.
+    /// Newest first, missing days filled in so the report keeps its shape.
     var reportDays: [DayRecord] {
         let reference = now()
-        return (0..<max(3, UsageStore.detailDays)).compactMap { offset -> DayRecord? in
+        return (0..<historyDays).compactMap { offset -> DayRecord? in
             guard let date = Calendar.current.date(byAdding: .day, value: -offset, to: reference) else { return nil }
             let key = Clock.dayKey(date)
             if let record = days[key] { return record }
@@ -291,23 +261,27 @@ final class UsageStore {
 
     var busiestDay: Int { days.values.map(\.tokens).max() ?? 1 }
 
+    /// True once a balance has actually been read; until then the widget falls
+    /// back to today's spend, which works for providers without a balance API.
+    var showsBalance: Bool { provider.balance != nil && balance.fetchedAt != .distantPast }
+
+    /// The number in the pill and the top of the card.
+    var headlineValue: Double { showsBalance ? balance.total : today.spend }
+
+    var headlineLabel: String { showsBalance ? "left" : "spent today" }
+
+    /// A balance carries its own currency; a spend total is priced in the
+    /// table's currency and must not borrow the balance's symbol.
+    var headlineCurrency: String { showsBalance ? balance.currency : pricing.currency }
+    var spendCurrency: String { pricing.currency }
+
     // MARK: Scanning
 
     func scan() {
         var ingested = 0
         TranscriptScanner.scan(offsets: &offsets, seen: &seen) { sample in
             ingested += 1
-            minutes[sample.minuteKey, default: 0] += sample.tokens
-
-            var record = days[sample.dayKey] ?? DayRecord(key: sample.dayKey)
-            record.tokens += sample.tokens
-            record.requests += 1
-            record.input += sample.input
-            record.output += sample.output
-            record.cacheRead += sample.cacheRead
-            record.cacheWrite += sample.cacheWrite
-            record.models[sample.model, default: 0] += sample.tokens
-            days[sample.dayKey] = record
+            ingest(sample)
         }
         lastScan = now()
         // The ticker runs every four seconds; rewriting a multi-megabyte state
@@ -315,6 +289,26 @@ final class UsageStore {
         if ingested > 0 || prune() {
             save()
         }
+    }
+
+    /// One response into the minute, day and price buckets. Internal so tests
+    /// can feed a sample without writing a transcript.
+    func ingest(_ sample: UsageSample) {
+        minutes[sample.minuteKey, default: 0] += sample.tokens
+
+        var record = days[sample.dayKey] ?? DayRecord(key: sample.dayKey)
+        record.tokens += sample.tokens
+        record.requests += 1
+        record.input += sample.input
+        record.output += sample.output
+        record.cacheRead += sample.cacheRead
+        record.cacheWrite += sample.cacheWrite
+        record.models[sample.model, default: 0] += sample.tokens
+        if let cost = pricing.cost(of: sample) {
+            record.spend += cost
+            record.pricedTokens += sample.tokens
+        }
+        days[sample.dayKey] = record
     }
 
     /// Drops expired minute detail and trims old days to a summary.
@@ -348,8 +342,9 @@ final class UsageStore {
             changed = true
         }
 
-        // Keep the retention promise: a month of summaries, nothing more.
-        let oldest = Calendar.current.date(byAdding: .day, value: -30, to: reference) ?? reference
+        // Keep a month of summaries, and never prune what the report shows.
+        let keepDays = max(30, historyDays)
+        let oldest = Calendar.current.date(byAdding: .day, value: -keepDays, to: reference) ?? reference
         let kept = days.filter { key, _ in
             guard let date = Clock.date(fromDayKey: key) else { return false }
             return date >= oldest
@@ -366,12 +361,19 @@ final class UsageStore {
     func refreshBalance() async {
         let stamp = now()
         lastBalanceFetch = stamp
-        guard let token = DeepSeek.token() else {
+
+        guard provider.balance != nil else {
+            balance = Balance()
+            problem = nil
+            return
+        }
+        guard let key = provider.key.resolve() else {
             problem = MeterError.noToken.localizedDescription
             return
         }
+
         do {
-            let fresh = try await DeepSeek.balance(token: token)
+            let fresh = try await BalanceClient.fetch(provider, key: key)
 
             // Only attribute a delta to today when the two readings are close
             // enough that nothing unobserved happened in between — otherwise a
@@ -382,7 +384,7 @@ final class UsageStore {
                previous - fresh.total > 0.000_1 {
                 let key = Clock.dayKey(stamp)
                 var record = days[key] ?? DayRecord(key: key)
-                record.spend += previous - fresh.total
+                record.observed += previous - fresh.total
                 days[key] = record
             }
             // A rise means a top-up, not negative spend.
@@ -399,21 +401,46 @@ final class UsageStore {
 
     // MARK: Configuration
 
-    private struct Config: Codable {
+    private struct ConfigFile: Decodable {
+        var provider: ProviderOverride?
+        var pricing: PricingOverride?
+        var historyDays: Int?
         var thresholds: Thresholds?
     }
 
     /// Optional `config.json` next to `state.json`; every field is optional.
     private func applyConfig() {
-        guard let data = try? Data(contentsOf: configURL),
-              let config = try? JSONDecoder().decode(Config.self, from: data),
-              let configured = config.thresholds else { return }
-        thresholds = configured
+        let preset = Presets.detect()
+        var resolved = preset.provider
+        var rates = preset.pricing
+        var days = historyDays
+        var configured: Thresholds?
+
+        if let data = try? Data(contentsOf: configURL),
+           let config = try? JSONDecoder().decode(ConfigFile.self, from: data) {
+            resolved.merge(config.provider)
+            if let override = config.pricing { rates.merge(override) }
+            if let value = config.historyDays { days = min(max(value, 3), 30) }
+            configured = config.thresholds
+        }
+
+        provider = resolved
+        pricing = rates
+        historyDays = days
+        if let configured { thresholds = configured }
+    }
+
+    /// The menu's "Reload Configuration" — no relaunch needed after an edit.
+    func reloadConfiguration() {
+        applyConfig()
+        scan()
+        Task { await refreshBalance() }
     }
 
     // MARK: Persistence
 
     private struct Snapshot: Codable {
+        var version: Int
         var minutes: [String: Int]
         var days: [String: DayRecord]
         var offsets: [String: UInt64]
@@ -421,10 +448,43 @@ final class UsageStore {
         var lastBalanceTotal: Double?
         var lastBalanceAt: Date?
         var thresholds: Thresholds
+
+        init(
+            version: Int,
+            minutes: [String: Int],
+            days: [String: DayRecord],
+            offsets: [String: UInt64],
+            seen: [String],
+            lastBalanceTotal: Double?,
+            lastBalanceAt: Date?,
+            thresholds: Thresholds
+        ) {
+            self.version = version
+            self.minutes = minutes
+            self.days = days
+            self.offsets = offsets
+            self.seen = seen
+            self.lastBalanceTotal = lastBalanceTotal
+            self.lastBalanceAt = lastBalanceAt
+            self.thresholds = thresholds
+        }
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            version = try container.decodeIfPresent(Int.self, forKey: .version) ?? 1
+            minutes = try container.decodeIfPresent([String: Int].self, forKey: .minutes) ?? [:]
+            days = try container.decodeIfPresent([String: DayRecord].self, forKey: .days) ?? [:]
+            offsets = try container.decodeIfPresent([String: UInt64].self, forKey: .offsets) ?? [:]
+            seen = try container.decodeIfPresent([String].self, forKey: .seen) ?? []
+            lastBalanceTotal = try container.decodeIfPresent(Double.self, forKey: .lastBalanceTotal)
+            lastBalanceAt = try container.decodeIfPresent(Date.self, forKey: .lastBalanceAt)
+            thresholds = try container.decodeIfPresent(Thresholds.self, forKey: .thresholds) ?? Thresholds()
+        }
     }
 
     private func save() {
         let snapshot = Snapshot(
+            version: 2,
             minutes: minutes,
             days: days,
             offsets: offsets,
@@ -447,5 +507,16 @@ final class UsageStore {
         lastBalanceTotal = snapshot.lastBalanceTotal
         lastBalanceAt = snapshot.lastBalanceAt
         thresholds = snapshot.thresholds
+
+        // Version 1 only had balance-observed spend in `spend`. Move it so new
+        // price-based totals start clean instead of double counting.
+        if snapshot.version < 2 {
+            for (key, var record) in days where record.observed == 0 {
+                record.observed = record.spend
+                record.spend = 0
+                record.pricedTokens = 0
+                days[key] = record
+            }
+        }
     }
 }

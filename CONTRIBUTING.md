@@ -10,8 +10,8 @@ Thanks for looking. This is a small app on purpose — the fastest way to get a 
 ## Development setup
 
 ```bash
-git clone https://github.com/AMBR0SI0/DeepSeekMeter.git
-cd DeepSeekMeter
+git clone https://github.com/AMBR0SI0/token-meter.git
+cd token-meter
 swift build
 swift test
 ```
@@ -23,8 +23,12 @@ Requires macOS 14+, Xcode 16 or newer (Swift 6 toolchain), and the Command Line 
 1. Branch from `main`.
 2. Keep the diff focused: one concern per PR, no drive-by reformatting.
 3. Run `swift build` and `swift test`. Both must pass.
-4. If you changed a view, run `swift run DeepSeekMeter --snapshot` and include the regenerated PNGs — screenshots in `docs/screenshots/` use deterministic demo data, so they are diffable.
+4. If you changed a view, run `swift run TokenMeter --snapshot` and include the regenerated PNGs — screenshots in `docs/screenshots/` use deterministic demo data, so they are diffable.
 5. Write a commit message that says why, not just what.
+
+## Adding a provider
+
+Providers are data, not code paths. A new preset is one `static let` in `Provider.swift` (name, key variable, balance endpoint, JSON paths) plus, if the provider publishes a price list, a `Pricing` preset in `Pricing.swift` and a detection branch in `Presets.detect`. Add a test to `ProviderTests` for the detection and to `PricingTests` for the rates. Anything that cannot be expressed as a preset is already configurable through `config.json`, so a code change should be rare.
 
 ## House rules
 
@@ -37,6 +41,6 @@ Requires macOS 14+, Xcode 16 or newer (Swift 6 toolchain), and the Command Line 
 ## Releasing (maintainer)
 
 1. Bump `CFBundleShortVersionString` in `build.sh`.
-2. `./build.sh` and confirm `lipo -archs DeepSeekMeter.app/Contents/MacOS/DeepSeekMeter` prints `x86_64 arm64`.
+2. `./build.sh` and confirm `lipo -archs TokenMeter.app/Contents/MacOS/TokenMeter` prints `x86_64 arm64`.
 3. Regenerate screenshots and commit everything.
 4. Tag: `git tag v1.0.0 && git push --tags`.

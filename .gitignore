@@ -1,7 +1,7 @@
 # Build products
 .build/
 .swiftpm/
-DeepSeekMeter.app/
+TokenMeter.app/
 *.xcodeproj
 
 # Local tooling

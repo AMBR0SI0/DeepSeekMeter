@@ -1,26 +1,29 @@
-# DeepSeekMeter — Project Notes
+# TokenMeter — Project Notes
 
-A macOS menu bar HUD showing DeepSeek account balance and token throughput. Swift 6 toolchain, SwiftPM, AppKit + SwiftUI. No Xcode project.
+A macOS menu bar HUD showing an LLM endpoint's remaining balance, token throughput and estimated spend. Provider-agnostic: usage comes from Claude Code transcripts, balance and prices come from a preset plus `config.json`. Swift 6 toolchain, SwiftPM, AppKit + SwiftUI. No Xcode project.
 
 ## Commands
 
 ```bash
 swift build                                  # debug build
-swift test                                   # 23 XCTest cases
+swift test                                   # 47 XCTest cases
 ./build.sh                                   # universal .app bundle
 ./build.sh --native                          # faster, current arch only
-swift run DeepSeekMeter --snapshot           # regenerate docs/screenshots/*.png
+swift run TokenMeter --snapshot              # regenerate docs/screenshots/*.png
 swift Scripts/make-icon.swift                # regenerate icon (writes docs/icon.png + Resources/AppIcon.icns)
+swift Scripts/make-logo.swift                # regenerate the README logo from docs/icon.png
 ```
 
 ## Layout
 
-- `Sources/DeepSeekMeter/App.swift` — `MenuBarExtra`, `WidgetPanel` (NSPanel), `PanelController` geometry, `Snapshot` offscreen renderer.
-- `Sources/DeepSeekMeter/Data.swift` — `TranscriptScanner` (incremental JSONL reader), `DeepSeek` client, `UsageStore` (@Observable, MainActor).
-- `Sources/DeepSeekMeter/Models.swift` — `Balance`, `DayRecord`, `Thresholds`, `Level`, `Clock`, `Fmt`.
-- `Sources/DeepSeekMeter/Design.swift` — palette, `GlassCard`, `Orb`, `VBars`, `GaugeBar`, typography helpers.
-- `Sources/DeepSeekMeter/Views.swift` — the three states: idle pill, compact card, expanded report.
-- `Tests/DeepSeekMeterTests/MeterTests.swift` — all tests.
+- `Sources/TokenMeter/App.swift` — `MenuBarExtra`, `WidgetPanel` (NSPanel), `PanelController` geometry, menu + `Configuration.open()`, `Snapshot` offscreen renderer.
+- `Sources/TokenMeter/Data.swift` — `TranscriptScanner` (incremental JSONL reader), `UsageStore` (@Observable, MainActor), config loading, persistence and migration.
+- `Sources/TokenMeter/Provider.swift` — `JSONPath`, `KeyRef`, `BalanceSpec`, `Provider`, presets, `Presets.detect`, `BalanceClient`.
+- `Sources/TokenMeter/Pricing.swift` — `ModelPrice`, `PriceSchedule`, `Pricing`, cost math, override merging.
+- `Sources/TokenMeter/Models.swift` — `Balance`, `DayRecord`, `Thresholds`, `Level`, `Clock`, `Fmt`.
+- `Sources/TokenMeter/Design.swift` — palette, `GlassCard`, `Orb`, `VBars`, `GaugeBar`, typography helpers.
+- `Sources/TokenMeter/Views.swift` — the three states: idle pill, compact card, expanded report.
+- `Tests/TokenMeterTests/MeterTests.swift` — all tests.
 
 ## Invariants
 
@@ -34,6 +37,10 @@ swift Scripts/make-icon.swift                # regenerate icon (writes docs/icon
 - Transcript timestamps are UTC, buckets are **local** via `Clock`. Tests must compare through `Clock`, never hard-coded strings.
 - `UsageStore.save()` is deliberately conditional (`ingested > 0 || prune()`). Do not make it unconditional — the ticker runs every 4 s.
 - Balance deltas are only attributed to today when readings are <15 minutes apart (`lastBalanceAt`).
+- Usage fields are provider-independent; never branch on `provider.name` outside presets. Balance and pricing are the only provider-specific surfaces.
+- `DayRecord.spend` is the price-table estimate; `DayRecord.observed` is balance-delta spend. Keep them separate — an unpriced model must leave `pricedTokens < tokens` rather than silently cost zero.
+- `Pricing.merge` overlays config onto the preset: adding one model must not drop the others. With no matching price and no fallback, `cost` returns nil (unpriced), never 0.
+- Config is reloadable at runtime (`applyConfig` / `reloadConfiguration`); do not cache it at init.
 
 ## Rules
 

@@ -19,12 +19,38 @@ struct DayRecord: Codable, Hashable, Identifiable {
     var output: Int = 0
     var cacheRead: Int = 0
     var cacheWrite: Int = 0
+    /// Estimated from the price table, in the pricing currency.
     var spend: Double = 0
+    /// Tokens that had a price. Below `tokens`, the day's spend is a floor.
+    var pricedTokens: Int = 0
+    /// Drops observed in the provider's reported balance while the app ran.
+    var observed: Double = 0
     var models: [String: Int] = [:]
 
     var cacheHitRate: Double {
         let prompt = input + cacheRead + cacheWrite
         return prompt > 0 ? Double(cacheRead) / Double(prompt) : 0
+    }
+
+    init(key: String) {
+        self.key = key
+    }
+
+    /// Hand-written so state written by older versions — which had no
+    /// `pricedTokens` or `observed` — still loads.
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        key = try container.decode(String.self, forKey: .key)
+        tokens = try container.decodeIfPresent(Int.self, forKey: .tokens) ?? 0
+        requests = try container.decodeIfPresent(Int.self, forKey: .requests) ?? 0
+        input = try container.decodeIfPresent(Int.self, forKey: .input) ?? 0
+        output = try container.decodeIfPresent(Int.self, forKey: .output) ?? 0
+        cacheRead = try container.decodeIfPresent(Int.self, forKey: .cacheRead) ?? 0
+        cacheWrite = try container.decodeIfPresent(Int.self, forKey: .cacheWrite) ?? 0
+        spend = try container.decodeIfPresent(Double.self, forKey: .spend) ?? 0
+        pricedTokens = try container.decodeIfPresent(Int.self, forKey: .pricedTokens) ?? 0
+        observed = try container.decodeIfPresent(Double.self, forKey: .observed) ?? 0
+        models = try container.decodeIfPresent([String: Int].self, forKey: .models) ?? [:]
     }
 }
 
@@ -128,6 +154,13 @@ enum Fmt {
 
     static func money(_ value: Double, currency: String) -> String {
         let symbol = currency.uppercased() == "CNY" ? "¥" : "$"
+        return symbol + String(format: "%.2f", value)
+    }
+
+    /// Unlike a balance, a single day's spend is often below a cent.
+    static func cost(_ value: Double, currency: String) -> String {
+        let symbol = currency.uppercased() == "CNY" ? "¥" : "$"
+        if value > 0, value < 0.005 { return "<" + symbol + "0.01" }
         return symbol + String(format: "%.2f", value)
     }
 
