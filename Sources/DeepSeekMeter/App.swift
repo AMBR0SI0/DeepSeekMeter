@@ -10,6 +10,10 @@ struct DeepSeekMeterApp: App {
     var body: some Scene {
         MenuBarExtra("DeepSeek Meter", systemImage: "gauge.with.dots.needle.67percent") {
             Button("Show Meter") { PanelController.shared.show() }
+            Button("Reset Position") { PanelController.shared.resetPosition() }
+            Button("Open Data Folder") {
+                NSWorkspace.shared.activateFileViewerSelecting([UsageStore.dataDirectory])
+            }
             Button("Refresh Now") {
                 UsageStore.shared.scan()
                 Task { await UsageStore.shared.refreshBalance() }
@@ -54,12 +58,67 @@ enum Snapshot {
         render(.expanded)
     }
 
+    /// Screenshots ship with the repository, so they use generated figures
+    /// rather than whatever happened to be in the author's account.
+    private static func demoStore() -> UsageStore {
+        let store = UsageStore()
+        let fixed = Date()
+        store.now = { fixed }
+
+        var seed: UInt64 = 0x5EED
+        func random() -> Double {
+            seed = seed &* 6_364_136_223_846_793_005 &+ 1_442_695_040_888_963_407
+            return Double((seed >> 33) % 1_000) / 1_000
+        }
+
+        var minutes: [String: Int] = [:]
+        for index in 0..<60 {
+            let date = Calendar.current.date(byAdding: .minute, value: index - 59, to: fixed) ?? fixed
+            let wave = sin(Double(index) / 6.5) * 0.5 + 0.5
+            // Two quiet stretches so the chart reads like real work, not a sine wave.
+            let idle = (20...26).contains(index) || (44...46).contains(index)
+            let tokens = idle ? 0 : Int(wave * 320_000 + random() * 120_000)
+            minutes[Clock.minuteKey(date)] = tokens
+        }
+        store.minutes = minutes
+
+        func day(_ offset: Int, _ tokens: Int, _ requests: Int) -> (String, DayRecord) {
+            let date = Calendar.current.date(byAdding: .day, value: offset, to: fixed) ?? fixed
+            var record = DayRecord(key: Clock.dayKey(date))
+            record.tokens = tokens
+            record.requests = requests
+            record.input = Int(Double(tokens) * 0.16)
+            record.output = Int(Double(tokens) * 0.03)
+            record.cacheRead = Int(Double(tokens) * 0.81)
+            record.spend = Double(tokens) / 1_000_000 * 0.42
+            return (record.key, record)
+        }
+
+        store.days = Dictionary(uniqueKeysWithValues: [
+            day(0, 13_240_000, 968),
+            day(-1, 38_640_000, 1_940),
+            day(-2, 22_150_000, 1_204),
+        ])
+        store.balance = Balance(total: 42.80, granted: 10, toppedUp: 32.80, currency: "USD", fetchedAt: fixed)
+        store.lastScan = fixed
+        store.isReady = true
+        return store
+    }
+
     private static func render(_ mode: WidgetState) {
         let model = WidgetModel()
         model.mode = mode
-        let host = NSHostingView(rootView: RootView(store: .shared, model: model) {})
+        let host = NSHostingView(rootView: RootView(store: demoStore(), model: model) {})
 
-        capture(host, size: PanelController.Layout.size(mode), path: "/tmp/deepseekmeter-\(mode).png")
+        let dir = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+            .appending(path: "docs/screenshots", directoryHint: .isDirectory)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+
+        capture(
+            host,
+            size: PanelController.Layout.size(mode),
+            path: dir.appending(path: "\(mode).png").path
+        )
     }
 
     private static func capture<V: View>(_ host: NSHostingView<V>, size: CGSize, path: String) {
@@ -98,7 +157,8 @@ final class WidgetPanel: NSPanel {
     private var downPoint: NSPoint?
     private var dragging = false
 
-    override var canBecomeKey: Bool { true }
+    /// A HUD that never takes keyboard focus from the app you are actually typing in.
+    override var canBecomeKey: Bool { false }
     override var canBecomeMain: Bool { false }
 
     override func sendEvent(_ event: NSEvent) {
@@ -259,6 +319,23 @@ final class PanelController: NSObject {
         panel.orderFrontRegardless()
         self.panel = panel
         startWatchdog()
+    }
+
+    /// Puts the pill back in the top-right corner, collapsed.
+    func resetPosition() {
+        guard let panel else {
+            show()
+            return
+        }
+        model.mode = .idle
+        panel.handlesPointer = true
+
+        let target = NSRect(origin: defaultOrigin(), size: Layout.idle).clampedToScreen()
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0.24
+            context.timingFunction = CAMediaTimingFunction(controlPoints: 0.22, 1.0, 0.36, 1.0)
+            panel.animator().setFrame(target, display: true)
+        }
     }
 
     // MARK: Staying on screen

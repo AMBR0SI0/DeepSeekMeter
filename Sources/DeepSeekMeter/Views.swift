@@ -20,6 +20,10 @@ struct RootView: View {
     private var level: Level { store.overallLevel }
     private var mode: WidgetState { model.mode }
 
+    /// Barely any traffic in the last ten minutes reads as quiet rather than as
+    /// a healthy per-minute rate, so the pill never looks busy while idle.
+    private var idleLevel: Level { store.isQuiet ? .idle : level }
+
     var body: some View {
         Group {
             switch mode {
@@ -42,7 +46,7 @@ struct RootView: View {
     private var idle: some View {
         ZStack {
             HStack(spacing: 6) {
-                Orb(level: level, size: 10, animated: false)
+                Orb(level: idleLevel, size: 10, animated: false)
 
                 Text(Fmt.money(store.balance.total, currency: store.balance.currency))
                     .number(12)
@@ -77,7 +81,7 @@ struct RootView: View {
             ZStack(alignment: .leading) {
                 Capsule().fill(Color.white.opacity(0.08))
                 Capsule()
-                    .fill(level.tint)
+                    .fill(idleLevel.tint)
                     .frame(width: max(geo.size.width * min(load, 1), load > 0 ? 3 : 0))
             }
         }
@@ -102,9 +106,9 @@ struct RootView: View {
 
                 Spacer(minLength: 3)
 
-                Text(level.label)
+                Text(store.isQuiet ? "quiet" : level.label)
                     .label(7)
-                    .foregroundStyle(level.tint)
+                    .foregroundStyle(store.isQuiet ? Palette.quiet : level.tint)
             }
             .padding(.top, 10)
 

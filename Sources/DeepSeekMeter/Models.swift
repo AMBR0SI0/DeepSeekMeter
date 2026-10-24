@@ -20,7 +20,6 @@ struct DayRecord: Codable, Hashable, Identifiable {
     var cacheRead: Int = 0
     var cacheWrite: Int = 0
     var spend: Double = 0
-    var summarized: Bool = false
     var models: [String: Int] = [:]
 
     var cacheHitRate: Double {
@@ -38,6 +37,22 @@ struct Thresholds: Codable {
     var red1h = 20_000_000
     /// Below this in the ten-minute window the meter reads as quiet, not busy.
     var idleBelow = 50_000
+
+    init() {}
+
+    /// Hand-written so a config file can set one threshold and leave the rest
+    /// at their defaults.
+    init(from decoder: Decoder) throws {
+        let defaults = Thresholds()
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        warn1m = try container.decodeIfPresent(Int.self, forKey: .warn1m) ?? defaults.warn1m
+        red1m = try container.decodeIfPresent(Int.self, forKey: .red1m) ?? defaults.red1m
+        warn10m = try container.decodeIfPresent(Int.self, forKey: .warn10m) ?? defaults.warn10m
+        red10m = try container.decodeIfPresent(Int.self, forKey: .red10m) ?? defaults.red10m
+        warn1h = try container.decodeIfPresent(Int.self, forKey: .warn1h) ?? defaults.warn1h
+        red1h = try container.decodeIfPresent(Int.self, forKey: .red1h) ?? defaults.red1h
+        idleBelow = try container.decodeIfPresent(Int.self, forKey: .idleBelow) ?? defaults.idleBelow
+    }
 }
 
 /// How much of the widget is showing. Hover adds detail to the idle pill, a
@@ -57,8 +72,6 @@ enum Level: Int, Comparable {
         else if value > 0 { self = .calm }
         else { self = .idle }
     }
-
-    var isAlarming: Bool { self == .hot }
 }
 
 // MARK: - Clock
@@ -106,15 +119,11 @@ enum Clock {
 enum Fmt {
     static func compact(_ value: Int) -> String {
         let n = Double(value)
-        if abs(n) >= 1_000_000 { return String(format: "%.2fM", n / 1_000_000) }
-        if abs(n) >= 1_000 { return String(format: "%.1fk", n / 1_000) }
+        // The thresholds sit just below each boundary so rounding never
+        // produces "1000.0k" instead of "1.00M".
+        if abs(n) >= 999_950 { return String(format: "%.2fM", n / 1_000_000) }
+        if abs(n) >= 999.5 { return String(format: "%.1fk", n / 1_000) }
         return String(value)
-    }
-
-    static func full(_ value: Int) -> String {
-        let f = NumberFormatter()
-        f.numberStyle = .decimal
-        return f.string(from: NSNumber(value: value)) ?? String(value)
     }
 
     static func money(_ value: Double, currency: String) -> String {

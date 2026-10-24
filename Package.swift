@@ -13,6 +13,12 @@ let package = Package(
             dependencies: [.product(name: "Pow", package: "Pow")],
             path: "Sources/DeepSeekMeter",
             swiftSettings: [.swiftLanguageMode(.v5)]
-        )
+        ),
+        .testTarget(
+            name: "DeepSeekMeterTests",
+            dependencies: ["DeepSeekMeter"],
+            path: "Tests/DeepSeekMeterTests",
+            swiftSettings: [.swiftLanguageMode(.v5)]
+        ),
     ]
 )

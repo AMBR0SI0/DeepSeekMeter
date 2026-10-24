@@ -1,4 +1,11 @@
+# Build products
 .build/
+.swiftpm/
 DeepSeekMeter.app/
-.DS_Store
 *.xcodeproj
+
+# Local tooling
+.claudeignore
+
+# macOS
+.DS_Store

@@ -116,57 +116,6 @@ struct Orb: View {
     }
 }
 
-// MARK: - Sparkline
-
-struct Sparkline: View {
-    var values: [Int]
-    var tint: Color
-
-    var body: some View {
-        GeometryReader { geo in
-            let peak = max(values.max() ?? 1, 1)
-            let step = geo.size.width / CGFloat(max(values.count - 1, 1))
-            let points = values.enumerated().map { index, value in
-                CGPoint(
-                    x: CGFloat(index) * step,
-                    y: geo.size.height - (CGFloat(value) / CGFloat(peak)) * (geo.size.height - 2) - 1
-                )
-            }
-
-            ZStack {
-                smooth(points, closed: true, in: geo.size)
-                    .fill(LinearGradient(
-                        colors: [tint.opacity(0.35), tint.opacity(0.0)],
-                        startPoint: .top, endPoint: .bottom
-                    ))
-                smooth(points, closed: false, in: geo.size)
-                    .stroke(tint, style: StrokeStyle(lineWidth: 1.3, lineCap: .round, lineJoin: .round))
-            }
-            .animation(.smooth(duration: 0.5), value: values)
-        }
-    }
-
-    private func smooth(_ points: [CGPoint], closed: Bool, in size: CGSize) -> Path {
-        var path = Path()
-        guard let first = points.first, let last = points.last else { return path }
-        path.move(to: first)
-        for index in 1..<points.count {
-            let previous = points[index - 1]
-            let current = points[index]
-            let mid = CGPoint(x: (previous.x + current.x) / 2, y: (previous.y + current.y) / 2)
-            path.addQuadCurve(to: mid, control: previous)
-            path.addLine(to: mid)
-        }
-        path.addLine(to: last)
-        if closed {
-            path.addLine(to: CGPoint(x: last.x, y: size.height))
-            path.addLine(to: CGPoint(x: first.x, y: size.height))
-            path.closeSubpath()
-        }
-        return path
-    }
-}
-
 /// Column chart for the narrow hover state, where a line chart has no room to read.
 struct VBars: View {
     var values: [Int]
