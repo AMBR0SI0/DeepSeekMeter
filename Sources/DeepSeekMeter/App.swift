@@ -10,6 +10,7 @@ struct DeepSeekMeterApp: App {
     var body: some Scene {
         MenuBarExtra("DeepSeek Meter", systemImage: "gauge.with.dots.needle.67percent") {
             Button("Show Meter") { PanelController.shared.show() }
+            Button("Expand Meter") { PanelController.shared.expand() }
             Button("Reset Position") { PanelController.shared.resetPosition() }
             Button("Open Data Folder") {
                 NSWorkspace.shared.activateFileViewerSelecting([UsageStore.dataDirectory])
@@ -49,12 +50,12 @@ final class WidgetModel {
 }
 
 /// Renders each state through a live window, which is the only way ScrollView,
-/// materials and the hover layout lay out offscreen.
+/// materials and the compact layout lay out offscreen.
 @MainActor
 enum Snapshot {
     static func render() {
         render(.idle)
-        render(.hover)
+        render(.compact)
         render(.expanded)
     }
 
@@ -108,7 +109,7 @@ enum Snapshot {
     private static func render(_ mode: WidgetState) {
         let model = WidgetModel()
         model.mode = mode
-        let host = NSHostingView(rootView: RootView(store: demoStore(), model: model) {})
+        let host = NSHostingView(rootView: RootView(store: demoStore(), model: model))
 
         let dir = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
             .appending(path: "docs/screenshots", directoryHint: .isDirectory)
@@ -148,13 +149,21 @@ enum Snapshot {
     }
 }
 
-final class WidgetPanel: NSPanel {
-    var onTap: (() -> Void)?
-    var onDragEnd: (() -> Void)?
-    /// Off while the full report is open so SwiftUI gets every click.
-    var handlesPointer = true
+/// The hosting view takes the first click even when another app is active;
+/// without that, the click that wakes the HUD is swallowed by activation.
+final class HUDHostingView<Content: View>: NSHostingView<Content> {
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+}
 
-    private var downPoint: NSPoint?
+final class WidgetPanel: NSPanel {
+    /// Called on a click that never turned into a drag, with the point in
+    /// window coordinates so the controller can ignore its own buttons.
+    var onTap: ((NSPoint) -> Void)?
+    var onDragEnd: (() -> Void)?
+
+    private var downEvent: NSEvent?
+    /// `performDrag` returns before the window has moved, so the drag only
+    /// counts as finished when its mouse-up arrives.
     private var dragging = false
 
     /// A HUD that never takes keyboard focus from the app you are actually typing in.
@@ -162,73 +171,39 @@ final class WidgetPanel: NSPanel {
     override var canBecomeMain: Bool { false }
 
     override func sendEvent(_ event: NSEvent) {
-        guard handlesPointer else {
-            super.sendEvent(event)
-            return
-        }
-
         switch event.type {
         case .leftMouseDown:
-            downPoint = event.locationInWindow
+            downEvent = event
             dragging = false
 
         case .leftMouseDragged:
-            if let start = downPoint, !dragging {
-                let point = event.locationInWindow
-                if hypot(point.x - start.x, point.y - start.y) > 3 {
-                    dragging = true
-                    performDrag(with: event)
-                    downPoint = nil
-                    dragging = false
-                    onDragEnd?()
-                    return
-                }
-            }
+            guard let start = downEvent else { break }
+            let from = start.locationInWindow
+            let to = event.locationInWindow
+            guard hypot(to.x - from.x, to.y - from.y) > 3 else { break }
+
+            dragging = true
+            downEvent = nil
+            // Anchor the move to the mouse-down event. Anchoring to the first
+            // dragged event offsets the window by the drag threshold every
+            // time, which is what made it jump.
+            performDrag(with: start)
+            return
 
         case .leftMouseUp:
-            if !dragging, downPoint != nil { onTap?() }
-            downPoint = nil
+            if dragging {
+                dragging = false
+                onDragEnd?()
+            } else if downEvent != nil {
+                onTap?(event.locationInWindow)
+            }
+            downEvent = nil
 
         default:
             break
         }
 
         super.sendEvent(event)
-    }
-}
-
-final class HoverHostingView<Content: View>: NSHostingView<Content> {
-    var onHoverChange: ((Bool) -> Void)?
-    private var tracking: NSTrackingArea?
-    private var inside = false
-
-    override func updateTrackingAreas() {
-        super.updateTrackingAreas()
-        if let tracking { removeTrackingArea(tracking) }
-        let area = NSTrackingArea(
-            rect: .zero,
-            options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
-            owner: self,
-            userInfo: nil
-        )
-        addTrackingArea(area)
-        tracking = area
-    }
-
-    override func mouseEntered(with event: NSEvent) {
-        guard !inside else { return }
-        inside = true
-        onHoverChange?(true)
-    }
-
-    override func mouseExited(with event: NSEvent) {
-        guard inside else { return }
-        // Rebuilding the tracking area on resize can fake an exit while the
-        // pointer is still over the panel.
-        let point = convert(event.locationInWindow, from: nil)
-        guard !bounds.contains(point) else { return }
-        inside = false
-        onHoverChange?(false)
     }
 }
 
@@ -240,13 +215,16 @@ final class PanelController: NSObject {
         static let gap: CGFloat = 12
         /// A horizontal pill, the whole widget at rest.
         static let idle = CGSize(width: 116, height: 30)
-        static let hover = CGSize(width: 200, height: 192)
+        static let compact = CGSize(width: 200, height: 192)
         static let expanded = CGSize(width: 292, height: 500)
+        /// Top-right corner of the compact card holding its two buttons. A
+        /// click there is a button press, not a click on the card itself.
+        static let compactControls = 44.0
 
         static func size(_ mode: WidgetState) -> CGSize {
             switch mode {
             case .idle: return idle
-            case .hover: return hover
+            case .compact: return compact
             case .expanded: return expanded
             }
         }
@@ -254,8 +232,6 @@ final class PanelController: NSObject {
 
     let model = WidgetModel()
     private var panel: WidgetPanel?
-    private var pointerInside = false
-    private var hoverTask: Task<Void, Never>?
     private var watchdog: Timer?
 
     private override init() {
@@ -303,14 +279,18 @@ final class PanelController: NSObject {
         panel.acceptsMouseMovedEvents = true
         panel.isMovableByWindowBackground = false
 
-        panel.onTap = { [weak self] in self?.activate() }
+        panel.onTap = { [weak self] point in self?.tapped(at: point) }
         panel.onDragEnd = { [weak self] in self?.reanchor() }
 
-        let host = HoverHostingView(rootView: RootView(store: .shared, model: model) { [weak self] in
-            self?.activate()
-        })
-        host.onHoverChange = { [weak self] inside in self?.hover(inside) }
-        panel.contentView = host
+        panel.contentView = HUDHostingView(
+            rootView: RootView(
+                store: .shared,
+                model: model,
+                onExpand: { [weak self] in self?.setMode(.expanded) },
+                onCollapse: { [weak self] in self?.setMode(.compact) },
+                onMinimize: { [weak self] in self?.setMode(.idle) }
+            )
+        )
 
         panel.setFrame(
             NSRect(origin: defaultOrigin(), size: Layout.idle).clampedToScreen(),
@@ -321,6 +301,12 @@ final class PanelController: NSObject {
         startWatchdog()
     }
 
+    /// Opens the full report, for the menu bar fallback.
+    func expand() {
+        show()
+        setMode(.expanded)
+    }
+
     /// Puts the pill back in the top-right corner, collapsed.
     func resetPosition() {
         guard let panel else {
@@ -328,7 +314,6 @@ final class PanelController: NSObject {
             return
         }
         model.mode = .idle
-        panel.handlesPointer = true
 
         let target = NSRect(origin: defaultOrigin(), size: Layout.idle).clampedToScreen()
         NSAnimationContext.runAnimationGroup { context in
@@ -386,27 +371,21 @@ final class PanelController: NSObject {
 
     // MARK: State
 
-    private func activate() {
+    /// A click that stayed still. Clicks on the compact card's buttons never
+    /// reach here because they sit inside `compactControls`.
+    private func tapped(at point: NSPoint) {
         switch model.mode {
-        case .expanded: setMode(pointerInside ? .hover : .idle)
-        case .idle, .hover: setMode(.expanded)
-        }
-    }
+        case .idle:
+            setMode(.compact)
 
-    private func hover(_ inside: Bool) {
-        pointerInside = inside
-        hoverTask?.cancel()
-        guard model.mode != .expanded else { return }
+        case .compact:
+            let size = Layout.size(.compact)
+            let onControls = point.x > size.width - Layout.compactControls
+                && point.y > size.height - 26
+            if !onControls { setMode(.expanded) }
 
-        guard inside else {
-            setMode(.idle)
-            return
-        }
-
-        hoverTask = Task { [weak self] in
-            try? await Task.sleep(for: .milliseconds(90))
-            guard !Task.isCancelled else { return }
-            self?.setMode(.hover)
+        case .expanded:
+            break
         }
     }
 
@@ -415,7 +394,6 @@ final class PanelController: NSObject {
         model.mode = next
 
         guard let panel else { return }
-        panel.handlesPointer = next != .expanded
 
         let target = targetFrame(for: next, from: panel.frame)
         let duration: TimeInterval = next == .expanded ? 0.34 : 0.22
@@ -429,28 +407,38 @@ final class PanelController: NSObject {
 
     // MARK: Geometry
 
+    /// A drag left the panel where the user dropped it. Only when it is
+    /// dropped close to a side does it settle against that edge — snapping
+    /// from the middle of the screen would undo the drag.
     private func reanchor() {
-        guard let panel else { return }
-        let target = targetFrame(for: model.mode, from: panel.frame)
+        guard let panel,
+              let visible = PanelController.screen(for: panel.frame)?.visibleFrame else { return }
+
+        let threshold: CGFloat = 48
+        var target = panel.frame
+        if panel.frame.minX - visible.minX < threshold {
+            target.origin.x = visible.minX + Layout.gap
+        } else if visible.maxX - panel.frame.maxX < threshold {
+            target.origin.x = visible.maxX - panel.frame.width - Layout.gap
+        }
+        target = target.clampedToScreen()
+        guard target != panel.frame else { return }
+
         NSAnimationContext.runAnimationGroup { context in
-            context.duration = 0.22
+            context.duration = 0.18
             context.timingFunction = CAMediaTimingFunction(controlPoints: 0.22, 1.0, 0.36, 1.0)
             panel.animator().setFrame(target, display: true)
         }
     }
 
-    /// Pins the nearest horizontal edge, and grows away from the nearest
-    /// vertical one so the corner the user can see never moves.
+    /// Keeps the horizontal position and grows away from the nearest vertical
+    /// edge, so the corner the user is looking at never moves. Clamping pulls
+    /// the panel back on screen when it grows toward a side.
     private func targetFrame(for mode: WidgetState, from current: NSRect) -> NSRect {
         guard let visible = PanelController.screen(for: current)?.visibleFrame else { return current }
 
         let size = Layout.size(mode)
-        let side: CGFloat = current.midX < visible.midX ? 1 : -1
-
         var frame = NSRect(origin: current.origin, size: size)
-        frame.origin.x = side > 0
-            ? visible.minX + Layout.gap
-            : visible.maxX - size.width - Layout.gap
         frame.origin.y = current.midY >= visible.midY
             ? current.maxY - size.height
             : current.minY

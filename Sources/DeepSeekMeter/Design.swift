@@ -116,7 +116,7 @@ struct Orb: View {
     }
 }
 
-/// Column chart for the narrow hover state, where a line chart has no room to read.
+/// Column chart for the narrow compact state, where a line chart has no room to read.
 struct VBars: View {
     var values: [Int]
     var tint: Color

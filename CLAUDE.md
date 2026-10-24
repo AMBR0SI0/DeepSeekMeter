@@ -15,18 +15,21 @@ swift Scripts/make-icon.swift                # regenerate icon (writes docs/icon
 
 ## Layout
 
-- `Sources/DeepSeekMeter/App.swift` — `MenuBarExtra`, `WidgetPanel` (NSPanel), `HoverHostingView`, `PanelController` geometry, `Snapshot` offscreen renderer.
+- `Sources/DeepSeekMeter/App.swift` — `MenuBarExtra`, `WidgetPanel` (NSPanel), `PanelController` geometry, `Snapshot` offscreen renderer.
 - `Sources/DeepSeekMeter/Data.swift` — `TranscriptScanner` (incremental JSONL reader), `DeepSeek` client, `UsageStore` (@Observable, MainActor).
 - `Sources/DeepSeekMeter/Models.swift` — `Balance`, `DayRecord`, `Thresholds`, `Level`, `Clock`, `Fmt`.
 - `Sources/DeepSeekMeter/Design.swift` — palette, `GlassCard`, `Orb`, `VBars`, `GaugeBar`, typography helpers.
-- `Sources/DeepSeekMeter/Views.swift` — the three states: idle pill, hover card, expanded report.
+- `Sources/DeepSeekMeter/Views.swift` — the three states: idle pill, compact card, expanded report.
 - `Tests/DeepSeekMeterTests/MeterTests.swift` — all tests.
 
 ## Invariants
 
-- Three states only: `.idle` (116×30), `.hover` (200×192), `.expanded` (292×500). Sizes live in `PanelController.Layout`.
+- Three states only: `.idle` (116×30), `.compact` (200×192), `.expanded` (292×500). No hover tracking. Sizes live in `PanelController.Layout`.
 - The panel is `.nonactivatingPanel`, `canBecomeKey == false`, level `.statusBar`, joined to all Spaces. It must never steal focus.
-- Tap vs drag is decided in `WidgetPanel.sendEvent` with a 3 pt threshold; expanded mode sets `handlesPointer = false` so SwiftUI gets clicks.
+- Tap vs drag is decided in `WidgetPanel.sendEvent` with a 3 pt threshold. `performDrag` must be anchored to the mouse-down event — anchoring to the first dragged event offsets the window on every drag.
+- `performDrag` returns *before* the window has moved. The drag finishes on the next `.leftMouseUp`, which is where the edge snap (`reanchor`) runs. Do not snap straight after `performDrag`; the frame is still the old one.
+- Clicking is handled by the panel, not by SwiftUI. Do not add a `contentShape`/`onTapGesture` to the card surface: it fires alongside the header buttons, so `−` collapsed to the pill and immediately reopened.
+- The compact card grows buttons in its top-right `Layout.compactControls` square; `PanelController.tapped(at:)` ignores clicks there so SwiftUI gets them.
 - `RootView` sizes itself to the panel; changing a layout without changing `Layout.size` will clip.
 - Transcript timestamps are UTC, buckets are **local** via `Clock`. Tests must compare through `Clock`, never hard-coded strings.
 - `UsageStore.save()` is deliberately conditional (`ingested > 0 || prune()`). Do not make it unconditional — the ticker runs every 4 s.

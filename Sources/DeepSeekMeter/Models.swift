@@ -55,10 +55,10 @@ struct Thresholds: Codable {
     }
 }
 
-/// How much of the widget is showing. Hover adds detail to the idle pill, a
-/// click pins the full report open.
+/// How much of the widget is showing. A click opens the compact card, its
+/// expand button pins the full report open.
 enum WidgetState: Equatable {
-    case idle, hover, expanded
+    case idle, compact, expanded
 }
 
 enum Level: Int, Comparable {

@@ -17,9 +17,9 @@ A tiny always-on-top pill for macOS that shows what is left in your account and 
 
 ---
 
-| Resting | Hover | Full report |
+| Resting | Compact | Full report |
 | :-: | :-: | :-: |
-| <img src="docs/screenshots/idle.png" width="150" alt="Idle pill showing the remaining balance"> | <img src="docs/screenshots/hover.png" width="210" alt="Hover state with live windows and sparkline"> | <img src="docs/screenshots/expanded.png" width="300" alt="Expanded report with chart and daily history"> |
+| <img src="docs/screenshots/idle.png" width="150" alt="Idle pill showing the remaining balance"> | <img src="docs/screenshots/compact.png" width="210" alt="Compact card with live windows and sparkline"> | <img src="docs/screenshots/expanded.png" width="300" alt="Expanded report with chart and daily history"> |
 | Balance, a status orb, and a load hairline | 1 min · 10 min · 1 hour, plus a sparkline | Balance, windows, 60-minute chart, daily report |
 
 ## Why this exists
@@ -88,11 +88,12 @@ No key yet? Open the menu bar item → **Open Data Folder** to find the state di
 
 | Action | What happens |
 | --- | --- |
-| Hover the pill | Expands to the 1 min / 10 min / 1 hour windows and a 44-bar sparkline |
-| Click the pill | Opens the full report; click the header again to collapse |
-| Drag the pill | Moves it. It snaps to the nearest screen edge and grows away from the nearest horizontal edge, so the corner you can see never jumps |
+| Click the pill | Opens the compact card: 1 min / 10 min / 1 hour windows and a 44-bar sparkline |
+| Click the compact card (or ⌃) | Opens the full report; click ⌄ to go back |
+| Drag the widget | Moves it in any state. Dropped near a side it settles against that edge, and it always stays fully on screen, above the Dock |
+| Click − on either card | Collapses back to the pill |
 | Click a day row | Reveals input / output / cache-hit and observed spend for that day |
-| Menu bar icon | Show Meter · Reset Position · Open Data Folder · Refresh Now · Quit |
+| Menu bar icon | Show Meter · Expand Meter · Reset Position · Open Data Folder · Refresh Now · Quit |
 
 The pill is a non-activating HUD: it floats above other windows on every Space and full-screen app, and it never steals keyboard focus from whatever you are typing in.
 
@@ -187,11 +188,11 @@ swift Scripts/make-icon.swift        # writes docs/icon.png and Resources/AppIco
 
 ```
 Sources/DeepSeekMeter/
-  App.swift      MenuBarExtra, the NSPanel HUD, hover tracking, geometry
+  App.swift      MenuBarExtra, the NSPanel HUD, dragging, geometry
   Data.swift     transcript scanner, DeepSeek client, observable store
   Models.swift   balance, day records, thresholds, clock keys, formatting
   Design.swift   palette, glass card, orb, gauges, bar chart, typography
-  Views.swift    idle / hover / expanded layouts
+  Views.swift    idle / compact / expanded layouts
 Tests/…          formatting, clock, levels, parsing, windows, config
 ```
 

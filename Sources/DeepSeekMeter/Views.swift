@@ -11,7 +11,9 @@ struct MinutePoint: Identifiable {
 struct RootView: View {
     let store: UsageStore
     let model: WidgetModel
-    var onActivate: () -> Void
+    var onExpand: () -> Void = {}
+    var onCollapse: () -> Void = {}
+    var onMinimize: () -> Void = {}
 
     @State private var openDay: String?
     @State private var reveal = false
@@ -28,7 +30,7 @@ struct RootView: View {
         Group {
             switch mode {
             case .idle: idle
-            case .hover: hover
+            case .compact: compact
             case .expanded: expanded
             }
         }
@@ -93,9 +95,9 @@ struct RootView: View {
         return Double(value) / Double(red)
     }
 
-    // MARK: Hover — windows, sparkline, request count
+    // MARK: Compact — windows, sparkline, request count
 
-    private var hover: some View {
+    private var compact: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 6) {
                 Orb(level: level, size: 12)
@@ -109,8 +111,11 @@ struct RootView: View {
                 Text(store.isQuiet ? "quiet" : level.label)
                     .label(7)
                     .foregroundStyle(store.isQuiet ? Palette.quiet : level.tint)
+
+                iconButton("chevron.up", "Expand") { onExpand() }
+                iconButton("minus", "Collapse to pill") { onMinimize() }
             }
-            .padding(.top, 10)
+            .padding(.top, 8)
 
             HStack(alignment: .firstTextBaseline, spacing: 4) {
                 Text(Fmt.money(store.balance.total, currency: store.balance.currency))
@@ -158,6 +163,19 @@ struct RootView: View {
             .padding(.bottom, 8)
         }
         .padding(.horizontal, 11)
+    }
+
+    private func iconButton(_ name: String, _ help: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: name)
+                .font(.system(size: 8, weight: .bold))
+                .foregroundStyle(.white.opacity(0.55))
+                .frame(width: 16, height: 16)
+                .background(Circle().fill(Color.white.opacity(0.06)))
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help(help)
     }
 
     private func compactWindow(
@@ -220,27 +238,21 @@ struct RootView: View {
     }
 
     private var expandedHeader: some View {
-        Button(action: onActivate) {
-            HStack(spacing: 9) {
-                Orb(level: level, size: 16, animated: false)
+        HStack(spacing: 9) {
+            Orb(level: level, size: 16, animated: false)
 
-                VStack(alignment: .leading, spacing: 0) {
-                    Text("DeepSeek").number(13)
-                    Text("usage meter").label(7).foregroundStyle(.secondary)
-                }
-
-                Spacer(minLength: 4)
-
-                Image(systemName: "chevron.up")
-                    .font(.system(size: 9, weight: .bold))
-                    .foregroundStyle(.white.opacity(0.4))
-                    .frame(width: 20, height: 20)
+            VStack(alignment: .leading, spacing: 0) {
+                Text("DeepSeek").number(13)
+                Text("usage meter").label(7).foregroundStyle(.secondary)
             }
-            .padding(.horizontal, 14)
-            .frame(height: 52)
-            .contentShape(Rectangle())
+
+            Spacer(minLength: 4)
+
+            iconButton("chevron.down", "Collapse") { onCollapse() }
+            iconButton("minus", "Collapse to pill") { onMinimize() }
         }
-        .buttonStyle(.plain)
+        .padding(.horizontal, 14)
+        .frame(height: 52)
     }
 
     private func group<Content: View>(_ delay: Double, @ViewBuilder _ content: () -> Content) -> some View {
@@ -461,10 +473,6 @@ struct RootView: View {
                 .lineLimit(1)
 
             Spacer()
-
-            Text("click header to collapse")
-                .font(.system(size: 8))
-                .foregroundStyle(.white.opacity(0.22))
         }
     }
 }
