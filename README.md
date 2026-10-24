@@ -8,7 +8,6 @@
 
 A tiny always-on-top pill for macOS that shows what is left in your account and how hard you are currently driving it.
 
-[![CI](https://github.com/AMBR0SI0/DeepSeekMeter/actions/workflows/ci.yml/badge.svg)](https://github.com/AMBR0SI0/DeepSeekMeter/actions/workflows/ci.yml)
 ![macOS 14+](https://img.shields.io/badge/macOS-14%2B-000000?logo=apple&logoColor=white)
 ![Swift 6](https://img.shields.io/badge/Swift-6.0-F05138?logo=swift&logoColor=white)
 ![License: MIT](https://img.shields.io/badge/license-MIT-blue)
