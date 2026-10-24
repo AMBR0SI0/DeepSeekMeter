@@ -215,6 +215,8 @@ How many days the report shows, clamped to **3–30**, default **7**. Daily summ
 
 Values are **tokens**, summed across input, output, cache reads and cache writes. Omit the block to keep the defaults.
 
+### Environment variables
+
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `TOKENMETER_API_KEY` | — | Key override; wins over every provider variable |
